@@ -10,11 +10,16 @@ from discord.ext import tasks
 import tweepy
 from dotenv import load_dotenv
 import os
+import yaml
 
-load_dotenv()  # This loads the variables from .env into the environment
+dotenv_path = ".env"
+load_dotenv(dotenv_path=dotenv_path)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+print("BOT_TOKEN:", BOT_TOKEN)
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+
+
 USER_ID = int(os.getenv("USER_ID"))
 GLIF_API_TOKEN = os.getenv("GLIF_API_TOKEN")
 CONSUMER_KEY = os.getenv("CONSUMER_KEY")
@@ -31,6 +36,8 @@ class MyClient(discord.Client):
 
     def __init__(self, *, intents):
         super().__init__(intents=intents)
+        self.last_month = None
+        self.last_year = None
 
     async def download_images(self, attachments):
         async with aiohttp.ClientSession() as session:
@@ -117,6 +124,9 @@ class MyClient(discord.Client):
             print('Channel not found.')
 
     async def process_and_send_images(self):
+        month_name = ["January", "February", "March", "April", "May", "June", 
+                    "July", "August", "September", "October", "November", "December"]
+
         # Load the month and year from the YAML file
         with open('month.yaml', 'r') as file:
             month_data = yaml.safe_load(file)
@@ -124,7 +134,7 @@ class MyClient(discord.Client):
         current_year = month_data['year']
 
         # Convert month name to number (January -> 1, February -> 2, ...)
-        month_number = list(month_name).index(current_month)
+        month_number = month_name.index(current_month) + 1  # +1 because list index is 0-based but months are 1-based
 
         # Increment the month
         month_number += 1
@@ -133,7 +143,7 @@ class MyClient(discord.Client):
             current_year += 1
 
         # Convert the month number back to name
-        new_month = month_name[month_number]
+        new_month = month_name[month_number - 1] 
 
         # Save the incremented month and year back to the YAML file
         with open('month.yaml', 'w') as file:
@@ -142,17 +152,52 @@ class MyClient(discord.Client):
         channel = self.get_channel(CHANNEL_ID)
         await channel.send(f"**Options for {new_month}, {current_year}:**")
         # Use the new month and year in the API call
-        for i in range(10):
+        for i in range(5):
             image_url = await self.call_glif_api_async("anything", f"{new_month}, {current_year}", 1.8, GLIF_API_TOKEN)
             if image_url:
                 await self.download_and_split_image_async(image_url)
                 await self.send_images_discord(CHANNEL_ID, BOT_TOKEN)
+        if month_number == 1:
+            # If the new current month is January, then the last month was December of the previous year
+            last_month_name = "December"
+            last_month_year = current_year - 1  # Subtract one year because we've moved back to December
+        else:
+            # For any other month, just subtract one from the current month_number (which has already been incremented)
+            last_month_name = month_name[month_number - 2]  # month_number has already been incremented, so subtract 2
+            last_month_year = current_year                 
 
+        self.last_month, self.last_year = last_month_name, last_month_year
+
+    def apply_special_format(text):
+        # This is a simplified example that only converts a few characters.
+        # You would need to expand this dictionary to cover all characters you plan to use.
+        char_map = {
+            'a': '𝙖', 'b': '𝙗', 'c': '𝙘', 'd': '𝙙', 'e': '𝙚',
+            'f': '𝙛', 'g': '𝙜', 'h': '𝙝', 'i': '𝙞', 'j': '𝙟',
+            'k': '𝙠', 'l': '𝙡', 'm': '𝙢', 'n': '𝙣', 'o': '𝙤',
+            'p': '𝙥', 'q': '𝙦', 'r': '𝙧', 's': '𝙨', 't': '𝙩',
+            'u': '𝙪', 'v': '𝙫', 'w': '𝙬', 'x': '𝙭', 'y': '𝙮',
+            'z': '𝙯', 'A': '𝘼', 'B': '𝘽', 'C': '𝘾', 'D': '𝘿',
+            'E': '𝙀', 'F': '𝙁', 'G': '𝙂', 'H': '𝙃', 'I': '𝙄',
+            'J': '𝙅', 'K': '𝙆', 'L': '𝙇', 'M': '𝙈', 'N': '𝙉',
+            'O': '𝙊', 'P': '𝙋', 'Q': '𝙌', 'R': '𝙍', 'S': '𝙎',
+            'T': '𝙏', 'U': '𝙐', 'V': '𝙑', 'W': '𝙒', 'X': '𝙓',
+            'Y': '𝙔', 'Z': '𝙕',
+            '0': '𝟬', '1': '𝟭', '2': '𝟮', '3': '𝟯', '4': '𝟰',
+            '5': '𝟱', '6': '𝟲', '7': '𝟳', '8': '𝟴', '9': '𝟵',
+            '/': '∕', '{': '❴', '}': '❵',
+            ' ': ' ',  # Regular space
+            '\n': '\n',  # Newline character
+            '[': '[',  # Regular square bracket
+            ']': ']'   # Regular square bracket
+        }
+        
+        return ''.join(char_map.get(char, char) for char in text)
 
     async def post_tweets_with_media(self):
 
         file_paths = ['image_quarter_1.png', 'image_quarter_2.png', 'image_quarter_3.png', 'image_quarter_4.png']
-        text_template = "({current_number}/{total_number})"
+        
         # Twitter API credentials
         consumer_key = CONSUMER_KEY
         consumer_secret = CONSUMER_SECRET
@@ -171,7 +216,14 @@ class MyClient(discord.Client):
         previous_tweet_id = None
 
         for index, file_path in enumerate(file_paths, start=1):
-            text = text_template.format(current_number=index, total_number=total_files)
+            if index == 1:
+                # Include last_month and last_year for the first tweet, with two line breaks
+                formatted_date = apply_special_format(f"{self.last_month}, {self.last_year}\n\n")
+                text = f"{formatted_date}[{index}/{total_files}]"
+            else:
+                text = f"[{index}/{total_files}]"
+
+            text = apply_special_format(text) 
 
             # Upload the media file using v1.1 API in a separate thread
             media = await loop.run_in_executor(None, lambda: api_v1.media_upload(file_path))
@@ -192,7 +244,7 @@ class MyClient(discord.Client):
 
         return "Posted {} images".format(total_files)
 
-    async def count_emojis_and_post(self, consumer_key, consumer_secret, access_token, access_token_secret):
+    async def count_emojis_and_post(self):
         channel = self.get_channel(CHANNEL_ID)
         if not channel:
             print('Channel not found.')
@@ -231,8 +283,7 @@ class MyClient(discord.Client):
     @tasks.loop(seconds=60)
     async def daily_task(self):
         # Check if current time is 9 PM
-        if datetime.now().hour == 17 and datetime.now().minute == 00:
-            print("It's 9 PM, time to process and send images")
+        if datetime.now().hour == 17 and datetime.now().minute == 00:            
             await self.process_and_send_images()
 
         if datetime.now().hour == 21 and datetime.now().minute == 00:
